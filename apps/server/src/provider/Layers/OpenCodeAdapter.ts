@@ -107,6 +107,8 @@ export interface OpenCodeAdapterLiveOptions {
   readonly environment?: NodeJS.ProcessEnv;
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
+  /** Model slug → context window limit (max tokens). Populated by the provider after loading inventory. */
+  readonly modelContextLimits?: Map<string, number>;
 }
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -1255,6 +1257,13 @@ export function makeOpenCodeAdapter(
       context.activeTurnId = turnId;
       context.activeAgent = agent ?? (input.interactionMode === "plan" ? "plan" : undefined);
       context.activeVariant = variant;
+      // Resolve model context limit from the provider-populated map
+      if (modelSelection?.model && options?.modelContextLimits) {
+        const limit = options.modelContextLimits.get(modelSelection.model);
+        if (limit !== undefined && limit > 0) {
+          context.modelMaxTokens = limit;
+        }
+      }
       yield* updateProviderSession(
         context,
         {

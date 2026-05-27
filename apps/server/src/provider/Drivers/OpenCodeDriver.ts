@@ -127,9 +127,14 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
         env: processEnv,
       });
 
+      // Shared mutable map: model slug → context window limit (max tokens).
+      // Populated from the provider inventory whenever models are refreshed.
+      const modelContextLimits = new Map<string, number>();
+
       const adapter = yield* makeOpenCodeAdapter(effectiveConfig, {
         instanceId,
         environment: processEnv,
+        modelContextLimits,
         ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
       });
       const textGeneration = yield* makeOpenCodeTextGeneration(effectiveConfig, processEnv);
@@ -138,7 +143,20 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
         effectiveConfig,
         serverConfig.cwd,
         processEnv,
-      ).pipe(Effect.map(stampIdentity), Effect.provideService(OpenCodeRuntime, openCodeRuntime));
+      ).pipe(
+        Effect.map(stampIdentity),
+        Effect.tap((draft) =>
+          Effect.sync(() => {
+            modelContextLimits.clear();
+            for (const model of draft.models) {
+              if (model.capabilities?.contextLimit) {
+                modelContextLimits.set(model.slug, model.capabilities.contextLimit);
+              }
+            }
+          }),
+        ),
+        Effect.provideService(OpenCodeRuntime, openCodeRuntime),
+      );
 
       const snapshot = yield* makeManagedServerProvider<OpenCodeSettings>({
         maintenanceCapabilities,

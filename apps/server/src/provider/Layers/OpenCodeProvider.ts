@@ -189,6 +189,10 @@ function openCodeCapabilitiesForModel(input: {
       ? { id: agent.name, label: titleCaseSlug(agent.name), isDefault: true as const }
       : { id: agent.name, label: titleCaseSlug(agent.name) },
   );
+  const contextLimit =
+    typeof input.model.limit?.context === "number" && input.model.limit.context > 0
+      ? input.model.limit.context
+      : undefined;
   return createModelCapabilities({
     optionDescriptors: [
       ...(variantOptions.length > 0
@@ -214,6 +218,7 @@ function openCodeCapabilitiesForModel(input: {
           ]
         : []),
     ],
+    contextLimit,
   });
 }
 
