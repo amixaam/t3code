@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
-import { TrimmedNonEmptyString, NonNegativeInt } from "./baseSchemas.ts";
+import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { ProviderDriverKind } from "./providerInstance.ts";
 
 export const ProviderOptionDescriptorType = Schema.Literals(["select", "boolean"]);
@@ -124,7 +124,7 @@ function canonicalSelectionsToLegacyObject(
 
 export const ModelCapabilities = Schema.Struct({
   optionDescriptors: Schema.optional(Schema.Array(ProviderOptionDescriptor)),
-  contextLimit: Schema.optional(NonNegativeInt),
+  contextLimit: Schema.optional(Schema.Number),
 });
 export type ModelCapabilities = typeof ModelCapabilities.Type;
 
