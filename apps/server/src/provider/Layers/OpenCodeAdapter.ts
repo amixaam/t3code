@@ -8,6 +8,7 @@ import {
   RuntimeItemId,
   RuntimeRequestId,
   ThreadId,
+  type ThreadTokenUsageSnapshot,
   type ToolLifecycleItemType,
   TurnId,
   type UserInputQuestion,
@@ -80,6 +81,10 @@ interface OpenCodeSessionContext {
   activeTurnId: TurnId | undefined;
   activeAgent: string | undefined;
   activeVariant: string | undefined;
+  /** Accumulated token usage across all turns in this session. */
+  lastTokenUsage: ThreadTokenUsageSnapshot | undefined;
+  /** Known model context limit (max tokens), resolved from the provider inventory. */
+  modelMaxTokens: number | undefined;
   /**
    * One-shot guard flipped by `stopOpenCodeContext` / `emitUnexpectedExit`.
    * The session lifecycle is owned by `sessionScope`; this Ref exists only
@@ -565,6 +570,49 @@ export function makeOpenCodeAdapter(
       yield* Scope.close(context.sessionScope, Exit.void);
     });
 
+    /** Build and emit a thread.token-usage.updated event from accumulated usage. */
+    const emitTokenUsage = Effect.fn("emitTokenUsage")(function* (
+      context: OpenCodeSessionContext,
+      incomingTokens: {
+        readonly input: number;
+        readonly output: number;
+        readonly reasoning: number;
+      },
+    ) {
+      const usedTokens = incomingTokens.input + incomingTokens.output + incomingTokens.reasoning;
+      if (usedTokens <= 0) return;
+
+      const previousUsed = context.lastTokenUsage?.totalProcessedTokens ?? context.lastTokenUsage?.usedTokens ?? 0;
+      const totalProcessedTokens = previousUsed + usedTokens;
+
+      const snapshot: ThreadTokenUsageSnapshot = {
+        usedTokens: totalProcessedTokens,
+        totalProcessedTokens,
+        inputTokens: (context.lastTokenUsage?.inputTokens ?? 0) + incomingTokens.input,
+        outputTokens: (context.lastTokenUsage?.outputTokens ?? 0) + incomingTokens.output,
+        reasoningOutputTokens:
+          (context.lastTokenUsage?.reasoningOutputTokens ?? 0) + incomingTokens.reasoning,
+        lastUsedTokens: usedTokens,
+        lastInputTokens: incomingTokens.input,
+        lastOutputTokens: incomingTokens.output,
+        lastReasoningOutputTokens: incomingTokens.reasoning,
+        ...(context.modelMaxTokens !== undefined && context.modelMaxTokens > 0
+          ? { maxTokens: context.modelMaxTokens }
+          : {}),
+      };
+
+      context.lastTokenUsage = snapshot;
+
+      yield* emit({
+        ...(yield* buildEventBase({
+          threadId: context.session.threadId,
+          turnId: context.activeTurnId,
+        })),
+        type: "thread.token-usage.updated",
+        payload: { usage: snapshot },
+      });
+    });
+
     /** Emit content.delta and item.completed events for an assistant text part. */
     const emitAssistantTextDelta = Effect.fn("emitAssistantTextDelta")(function* (
       context: OpenCodeSessionContext,
@@ -659,6 +707,15 @@ export function makeOpenCodeAdapter(
         case "message.updated": {
           context.messageRoleById.set(event.properties.info.id, event.properties.info.role);
           if (event.properties.info.role === "assistant") {
+            const info = event.properties.info;
+            // Emit token usage from the assistant message if available
+            if (info.tokens && (info.tokens.input > 0 || info.tokens.output > 0)) {
+              yield* emitTokenUsage(context, {
+                input: info.tokens.input,
+                output: info.tokens.output,
+                reasoning: info.tokens.reasoning ?? 0,
+              });
+            }
             for (const part of context.partById.values()) {
               if (part.messageID !== event.properties.info.id) {
                 continue;
@@ -723,6 +780,15 @@ export function makeOpenCodeAdapter(
           const part = event.properties.part;
           context.partById.set(part.id, part);
           const messageRole = messageRoleForPart(context, part);
+
+          // Emit token usage from step-finish parts (per-step token counts)
+          if (part.type === "step-finish" && part.tokens) {
+            yield* emitTokenUsage(context, {
+              input: part.tokens.input,
+              output: part.tokens.output,
+              reasoning: part.tokens.reasoning ?? 0,
+            });
+          }
 
           if (messageRole === "assistant") {
             yield* emitAssistantTextDelta(context, part, turnId, event);
@@ -1115,6 +1181,8 @@ export function makeOpenCodeAdapter(
           activeTurnId: undefined,
           activeAgent: undefined,
           activeVariant: undefined,
+          lastTokenUsage: undefined,
+          modelMaxTokens: undefined,
           stopped: yield* Ref.make(false),
           sessionScope: started.sessionScope,
         };
